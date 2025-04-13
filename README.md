@@ -21,3 +21,9 @@ func DoSomething(key string) {
 go install github.com/nethish/allocateless@latest
 allocateless ./...
 ```
+
+## TODO
+1. Handle identifiers present in If
+2. Handle identifiers in switch
+3. Check if the arg is passed as read only in function args
+  * Currently if an identifier is present in func args, we ignore

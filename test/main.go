@@ -3,6 +3,7 @@ package something
 import "fmt"
 
 func A() {
+	// Cannot be moved to global. It's reassigned
 	a := map[string]string{}
 	a = nil
 
@@ -19,6 +20,7 @@ func A() {
 type server struct{}
 
 func (s *server) A() {
+	// This a can be moved to global
 	a := map[string]string{}
 
 	b := a["1"]

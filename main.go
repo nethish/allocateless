@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"go/types"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -34,15 +33,22 @@ func TestFile(pass *analysis.Pass, file *ast.File) bool {
 	return false
 }
 
-type A struct {
-	defines  []string
-	tokens   []token.Pos
-	lhsVars  []string
-	rhsVars  []string
+type Identifiers struct {
+	// Vars definied in a function or a method
+	defines []string
+
+	// Stores the Position of the identifier to report it to the console
+	tokens []token.Pos
+
+	// Vars present in LHS and RHS
+	lhsVars []string
+	rhsVars []string
+
+	// Vars present in function arguments
 	funcArgs []string
 }
 
-func (a *A) String() string {
+func (a *Identifiers) String() string {
 	b := strings.Builder{}
 
 	b.WriteString("[")
@@ -53,17 +59,19 @@ func (a *A) String() string {
 	return b.String()
 }
 
+// Traverse traverses the node to find identifiers present in lhs, rhs and function calls
 func Traverse(pass *analysis.Pass, n ast.Node) bool {
 	fn, ok := n.(*ast.FuncDecl)
 	if !ok {
 		return true
 	}
 
-	r := A{}
+	r := Identifiers{}
 
 	for _, stmt := range fn.Body.List {
 		switch s := stmt.(type) {
 		case *ast.AssignStmt:
+			// Is a map or slice defined using :=?
 			if s.Tok == token.DEFINE && IsMapOrSlice(s.Rhs) {
 				r.defines = append(r.defines, getVariableNames(s.Lhs)...)
 				r.tokens = append(r.tokens, s.Lhs[0].Pos())
@@ -110,14 +118,14 @@ func (a *allocateless) run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-func parseRhs(exprs []ast.Expr, r *A) {
+func parseRhs(exprs []ast.Expr, r *Identifiers) {
 	for _, rhs := range exprs {
 		parse(rhs, r, false)
 	}
 }
 
 // if function arg is true, append the identifier to r.funcArgs
-func parse(expr ast.Expr, r *A, function bool) {
+func parse(expr ast.Expr, r *Identifiers, function bool) {
 	switch t := expr.(type) {
 	// Check for vars in X and Y in binary expr
 	case *ast.BinaryExpr:
@@ -149,7 +157,7 @@ func parse(expr ast.Expr, r *A, function bool) {
 	}
 }
 
-func parseFunc(exprs []ast.Expr, r *A) {
+func parseFunc(exprs []ast.Expr, r *Identifiers) {
 	for _, ex := range exprs {
 		parse(ex, r, true)
 	}
@@ -194,6 +202,7 @@ func CheckConstLiteral(ex *ast.CompositeLit) bool {
 	return true
 }
 
+// Returns true if BasicLiteral or Selector expression
 func BasicOrSelector(expr ast.Expr) bool {
 	_, ok := expr.(*ast.BasicLit)
 	if ok {
@@ -208,24 +217,7 @@ func BasicOrSelector(expr ast.Expr) bool {
 	return false
 }
 
-func getLhsVariableName(expr []ast.Expr) []string {
-	if len(expr) != 1 {
-		return nil
-	}
-
-	names := []string{}
-
-	switch ident := expr[0].(type) {
-	case *ast.Ident:
-		if ident.Name != "" {
-			fmt.Println("identifier on lhs", ident)
-			names = append(names, ident.Name)
-		}
-	}
-
-	return names
-}
-
+// getVariableNames returns slice of string of the the identifiers
 func getVariableNames(expr []ast.Expr) []string {
 	var names []string
 
@@ -252,19 +244,6 @@ func getVariableNames(expr []ast.Expr) []string {
 
 	// fmt.Println(names)
 	return names
-}
-
-func isHeapAllocated(typ types.Type) bool {
-	switch t := typ.(type) {
-	case *types.Slice, *types.Map, *types.Pointer, *types.Interface, *types.Chan:
-		return true
-	case *types.Array:
-		return t.Len() > 10 // Consider large arrays as heap allocated
-	case *types.Struct:
-		return true // Assume structs may contain pointers
-	default:
-		return false
-	}
 }
 
 func main() {
