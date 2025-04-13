@@ -23,7 +23,8 @@ allocateless ./...
 ```
 
 ## TODO
-1. Handle identifiers present in If
-2. Handle identifiers in switch
-3. Check if the arg is passed as read only in function args
+[ ] Handle identifiers present in If
+[ ] Handle identifiers in switch
+[ ] Check if the arg is passed as read only in function args
   * Currently if an identifier is present in func args, we ignore
+[ ] Add more tests
