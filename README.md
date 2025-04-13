@@ -21,5 +21,3 @@ func DoSomething(key string) {
 go install github.com/nethish/allocateless@latest
 allocateless ./...
 ```
-```
-```
