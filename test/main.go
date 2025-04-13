@@ -7,6 +7,7 @@ func A() {
 	a := map[string]string{}
 	a = nil
 
+	// Can be moved to global
 	d := "a"
 	c := []string{}
 
@@ -23,6 +24,7 @@ func (s *server) A() {
 	// This a can be moved to global
 	a := map[string]string{}
 
+	// Cannot be moved to global. Used in func args
 	b := a["1"]
 	Do(b)
 	fmt.Println(b)

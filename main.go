@@ -71,8 +71,8 @@ func Traverse(pass *analysis.Pass, n ast.Node) bool {
 	for _, stmt := range fn.Body.List {
 		switch s := stmt.(type) {
 		case *ast.AssignStmt:
-			// Is a map or slice defined using :=?
-			if s.Tok == token.DEFINE && IsMapOrSlice(s.Rhs) {
+			// Is the token a definition?
+			if s.Tok == token.DEFINE && IsNewDefinition(s.Rhs) {
 				r.defines = append(r.defines, getVariableNames(s.Lhs)...)
 				r.tokens = append(r.tokens, s.Lhs[0].Pos())
 				continue
@@ -163,8 +163,8 @@ func parseFunc(exprs []ast.Expr, r *Identifiers) {
 	}
 }
 
-// Currently only supports Map or Slice definition
-func IsMapOrSlice(expr []ast.Expr) bool {
+// Map, Slice or a Basic Literal
+func IsNewDefinition(expr []ast.Expr) bool {
 	if len(expr) != 1 {
 		return false
 	}
@@ -177,6 +177,8 @@ func IsMapOrSlice(expr []ast.Expr) bool {
 		if _, ok := ex.Type.(*ast.ArrayType); ok {
 			return CheckConstLiteral(ex)
 		}
+	case *ast.BasicLit:
+		return true
 	default:
 		return false
 	}
