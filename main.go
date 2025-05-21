@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -44,8 +45,8 @@ type Identifiers struct {
 	lhsVars []string
 	rhsVars []string
 
-	// Vars present in function arguments
-	funcArgs []string
+	// Vars present in function arguments that might be modified (non-basic types)
+	potentiallyModifiedFuncArgs []string
 }
 
 func (a *Identifiers) String() string {
@@ -68,27 +69,7 @@ func Traverse(pass *analysis.Pass, n ast.Node) bool {
 
 	r := Identifiers{}
 
-	for _, stmt := range fn.Body.List {
-		switch s := stmt.(type) {
-		case *ast.AssignStmt:
-			// Is the token a definition?
-			if s.Tok == token.DEFINE && IsNewDefinition(s.Rhs) {
-				r.defines = append(r.defines, getVariableNames(s.Lhs)...)
-				r.tokens = append(r.tokens, s.Lhs[0].Pos())
-				continue
-			}
-
-			// Is the variable getting assigned to another var?
-			if s.Tok == token.ASSIGN {
-				r.lhsVars = append(r.lhsVars, getVariableNames(s.Lhs)...)
-				parseRhs(s.Rhs, &r)
-			}
-
-		case *ast.ExprStmt:
-			// Is the variable being used in a function call?
-			parse(s.X, &r, false)
-		}
-	}
+	processStatementList(pass, fn.Body.List, &r)
 
 	for i, v := range r.defines {
 		if slices.Contains(r.funcArgs, v) {
@@ -105,6 +86,52 @@ func Traverse(pass *analysis.Pass, n ast.Node) bool {
 	return true
 }
 
+// processStatementList iterates over a list of statements and processes them.
+func processStatementList(pass *analysis.Pass, stmts []ast.Stmt, r *Identifiers) {
+	for _, stmt := range stmts {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			// Is the token a definition?
+			if s.Tok == token.DEFINE && IsNewDefinition(s.Rhs) {
+				r.defines = append(r.defines, getVariableNames(s.Lhs)...)
+				r.tokens = append(r.tokens, s.Lhs[0].Pos())
+				continue
+			}
+
+			// Is the variable getting assigned to another var?
+			if s.Tok == token.ASSIGN {
+				r.lhsVars = append(r.lhsVars, getVariableNames(s.Lhs)...)
+				parseRhs(pass, s.Rhs, r)
+			}
+
+		case *ast.ExprStmt:
+			// Is the variable being used in a function call?
+			parse(pass, s.X, r, false)
+		case *ast.IfStmt:
+			// Process the body of the if statement
+			processStatementList(pass, s.Body.List, r)
+			// Process the else block, if it exists
+			if s.Else != nil {
+				switch elseStmt := s.Else.(type) {
+				case *ast.BlockStmt:
+					processStatementList(pass, elseStmt.List, r)
+				case *ast.IfStmt:
+					// Handle else if by processing it as a new list containing single if statement
+					processStatementList(pass, []ast.Stmt{elseStmt}, r)
+				}
+			}
+		case *ast.SwitchStmt:
+			// Iterate over case clauses in the switch statement
+			for _, caseClause := range s.Body.List {
+				if cc, ok := caseClause.(*ast.CaseClause); ok {
+					// Process the body of the case clause
+					processStatementList(pass, cc.Body, r)
+				}
+			}
+		}
+	}
+}
+
 func (a *allocateless) run(pass *analysis.Pass) (interface{}, error) {
 	for _, file := range pass.Files {
 		if TestFile(pass, file) {
@@ -118,48 +145,55 @@ func (a *allocateless) run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-func parseRhs(exprs []ast.Expr, r *Identifiers) {
+func parseRhs(pass *analysis.Pass, exprs []ast.Expr, r *Identifiers) {
 	for _, rhs := range exprs {
-		parse(rhs, r, false)
+		parse(pass, rhs, r, false)
 	}
 }
 
-// if function arg is true, append the identifier to r.funcArgs
-func parse(expr ast.Expr, r *Identifiers, function bool) {
+// if function arg is true, append the identifier to r.potentiallyModifiedFuncArgs
+func parse(pass *analysis.Pass, expr ast.Expr, r *Identifiers, function bool) {
 	switch t := expr.(type) {
 	// Check for vars in X and Y in binary expr
 	case *ast.BinaryExpr:
-		parse(t.X, r, function)
-		parse(t.Y, r, function)
+		parse(pass, t.X, r, function)
+		parse(pass, t.Y, r, function)
 	case *ast.Ident:
 		// We have found a variable
 		if function {
-			r.funcArgs = append(r.funcArgs, t.Name)
+			// If it's a function argument, check its type
+			if typ := pass.TypesInfo.TypeOf(t); typ != nil {
+				if _, ok := typ.Underlying().(*types.Basic); !ok {
+					// Not a basic type, so it might be modified
+					r.potentiallyModifiedFuncArgs = append(r.potentiallyModifiedFuncArgs, t.Name)
+				}
+				// If it IS a basic type, we assume it's passed by value and not relevant for modification tracking here
+			}
 		} else {
 			r.rhsVars = append(r.rhsVars, t.Name)
 		}
 	case *ast.CallExpr:
 		// Check for any vars present in a function call expr
-		parseFunc(t.Args, r)
+		parseFunc(pass, t.Args, r)
 	case *ast.SliceExpr:
 		// Check the variable in slice expr slice[a: b: c]
-		parse(t.X, r, function)
+		parse(pass, t.X, r, function)
 
 	case *ast.IndexExpr:
 		// slice[a] or map[a]
-		parse(t.X, r, function)
+		parse(pass, t.X, r, function)
 
 	case *ast.ParenExpr:
 		// (a + b + fun(a, b))
-		parse(t.X, r, function)
+		parse(pass, t.X, r, function)
 	default:
 		// fmt.Println("DEFAULT", reflect.TypeOf(t))
 	}
 }
 
-func parseFunc(exprs []ast.Expr, r *Identifiers) {
+func parseFunc(pass *analysis.Pass, exprs []ast.Expr, r *Identifiers) {
 	for _, ex := range exprs {
-		parse(ex, r, true)
+		parse(pass, ex, r, true)
 	}
 }
 
